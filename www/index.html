@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cifrador AES-256</title>
+<style>
+:root{--bg:#f6f6f3;--card:#fff;--text:#1c1c1a;--muted:#6b6b66;--line:#d9d9d2;--accent:#2a5bd7;--accent-text:#fff;--ok:#1d7a46;--err:#b3261e;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#161615;--card:#212120;--text:#ececE8;--muted:#9a9a94;--line:#3a3a37;--accent:#6c93f5;--accent-text:#0d1220;--ok:#5fcf8c;--err:#ff8a80}}
+:root[data-theme="dark"]{--bg:#161615;--card:#212120;--text:#ececE8;--muted:#9a9a94;--line:#3a3a37;--accent:#6c93f5;--accent-text:#0d1220;--ok:#5fcf8c;--err:#ff8a80}
+*{box-sizing:border-box}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:560px;margin:0 auto;padding:20px 16px 40px}
+h1{font-size:1.4rem;margin:0 0 4px}
+p.sub{margin:0 0 16px;color:var(--muted);font-size:.92rem}
+.tabs{display:flex;gap:8px;margin-bottom:14px}
+.tabs button{flex:1;padding:10px;border:1px solid var(--line);background:var(--card);color:var(--text);border-radius:10px;font-size:1rem;cursor:pointer}
+.tabs button.on{background:var(--accent);color:var(--accent-text);border-color:var(--accent);font-weight:600}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px}
+label{display:block;font-weight:600;font-size:.9rem;margin:12px 0 6px}
+label:first-child{margin-top:0}
+textarea,input,select{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text);font:inherit}
+textarea{min-height:90px;resize:vertical}
+textarea.out{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.85rem;word-break:break-all}
+.go{width:100%;margin-top:14px;padding:12px;border:0;border-radius:10px;background:var(--accent);color:var(--accent-text);font-size:1rem;font-weight:600;cursor:pointer}
+.go:disabled{opacity:.6}
+.row{display:flex;gap:8px;margin-top:8px}
+.row button{flex:1;padding:9px;border:1px solid var(--line);background:var(--card);color:var(--text);border-radius:10px;cursor:pointer;font-size:.9rem}
+#msg{min-height:1.4em;margin-top:10px;font-size:.9rem}
+.ok{color:var(--ok)}.err{color:var(--err)}
+.note{margin-top:16px;font-size:.82rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+<h1>Cifrador de texto</h1>
+<p class="sub">Elige un método y una palabra o frase clave. Todo ocurre en tu navegador.</p>
+
+<div class="tabs">
+<button id="tabC" class="on" type="button">Cifrar</button>
+<button id="tabD" type="button">Descifrar</button>
+</div>
+
+<div class="card">
+<label for="met">Método</label>
+<select id="met">
+<optgroup label="Duros">
+<option value="aes256">AES-256-GCM (muy fuerte)</option>
+<option value="aes128">AES-128-GCM (fuerte)</option>
+</optgroup>
+<optgroup label="Fáciles de descifrar">
+<option value="xor">XOR con la clave</option>
+<option value="vig">Vigenère</option>
+<option value="cesar">César</option>
+<option value="atbash">Atbash (sin clave)</option>
+</optgroup>
+</select>
+<div id="info" class="note" style="margin-top:6px"></div>
+<label id="lblIn" for="inp">Texto a cifrar</label>
+<textarea id="inp" placeholder="Escribe tu palabra o frase"></textarea>
+
+<label for="key">Palabra o frase clave</label>
+<input id="key" type="password" autocomplete="off" placeholder="La clave que ya conoce quien descifra">
+
+<button class="go" id="go" type="button">Cifrar</button>
+<div id="msg" role="status"></div>
+
+<label for="out">Resultado</label>
+<textarea id="out" class="out" readonly></textarea>
+<div class="row">
+<button id="copy" type="button">Copiar</button>
+<button id="clear" type="button">Limpiar</button>
+</div>
+</div>
+
+<p class="note">La seguridad depende de la clave: una palabra suelta o algo adivinable se rompe en segundos. Usa una frase larga y poco predecible. Los métodos “fáciles” (XOR, Vigenère, César, Atbash) sirven para juegos y acertijos, no protegen nada importante. Con AES, si pierdes la clave no hay forma de recuperar el texto.</p>
+</main>
+
+<script>
+(function(){
+var mode='c';
+var enc=new TextEncoder(),dec=new TextDecoder();
+var $=function(id){return document.getElementById(id)};
+var ITER=600000;
+
+function toB64(b){var s='';for(var i=0;i<b.length;i++)s+=String.fromCharCode(b[i]);return btoa(s)}
+function fromB64(t){var s=atob(t.replace(/\s+/g,''));var b=new Uint8Array(s.length);for(var i=0;i<s.length;i++)b[i]=s.charCodeAt(i);return b}
+
+async function derive(pass,salt,bits){
+  var km=await crypto.subtle.importKey('raw',enc.encode(pass),'PBKDF2',false,['deriveKey']);
+  return crypto.subtle.deriveKey({name:'PBKDF2',salt:salt,iterations:ITER,hash:'SHA-256'},km,{name:'AES-GCM',length:bits||256},false,['encrypt','decrypt']);
+}
+async function cifrar(text,pass,bits){
+  var salt=crypto.getRandomValues(new Uint8Array(16));
+  var iv=crypto.getRandomValues(new Uint8Array(12));
+  var k=await derive(pass,salt,bits);
+  var ct=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv:iv},k,enc.encode(text)));
+  var all=new Uint8Array(28+ct.length);
+  all.set(salt,0);all.set(iv,16);all.set(ct,28);
+  return toB64(all);
+}
+async function descifrar(b64,pass,bits){
+  var all=fromB64(b64);
+  if(all.length<45)throw new Error('formato');
+  var k=await derive(pass,all.slice(0,16),bits);
+  var pt=await crypto.subtle.decrypt({name:'AES-GCM',iv:all.slice(16,28)},k,all.slice(28));
+  return dec.decode(pt);
+}
+
+var INFO={aes256:'Muy fuerte. Prácticamente imposible de romper sin la clave.',aes128:'Fuerte. Más rápido y también seguro hoy.',xor:'Débil. Se rompe fácil si la clave es corta.',vig:'Débil. Cifrado clásico, solo cambia letras A–Z.',cesar:'Muy débil. El desplazamiento sale de tu clave.',atbash:'Muy débil. Invierte el alfabeto y no usa clave.'};
+function letters(t,fn){var i=0;return t.replace(/[A-Za-z]/g,function(c){var b=c<='Z'?65:97;return String.fromCharCode((fn(c.charCodeAt(0)-b,i++)%26+26)%26+b)})}
+function ks(p){var a=[];for(var i=0;i<p.length;i++){var c=p[i].toLowerCase().charCodeAt(0)-97;if(c>=0&&c<26)a.push(c)}return a}
+async function run(m,t,p){
+  var v=$('met').value,d=m==='d',s=d?-1:1;
+  if(v==='aes256')return d?descifrar(t.trim(),p,256):cifrar(t,p,256);
+  if(v==='aes128')return d?descifrar(t.trim(),p,128):cifrar(t,p,128);
+  if(v==='atbash')return letters(t,function(x){return 25-x});
+  if(v==='cesar'){var sh=0;for(var i=0;i<p.length;i++)sh+=p.charCodeAt(i);sh%=26;return letters(t,function(x){return x+s*sh})}
+  if(v==='vig'){var k=ks(p);if(!k.length)throw new Error('clave');return letters(t,function(x,i){return x+s*k[i%k.length]})}
+  if(v==='xor'){var kb=enc.encode(p),src=d?fromB64(t.trim()):enc.encode(t),o=new Uint8Array(src.length);for(var j=0;j<src.length;j++)o[j]=src[j]^kb[j%kb.length];return d?dec.decode(o):toB64(o)}
+}
+function showInfo(){$('info').textContent=INFO[$('met').value]}
+$('met').onchange=function(){showInfo();$('out').value='';setMsg('')};
+showInfo();
+function setMsg(t,c){var m=$('msg');m.textContent=t;m.className=c||''}
+function setMode(m){
+  mode=m;
+  $('tabC').className=m==='c'?'on':'';
+  $('tabD').className=m==='d'?'on':'';
+  $('lblIn').textContent=m==='c'?'Texto a cifrar':'Texto cifrado';
+  $('inp').placeholder=m==='c'?'Escribe tu palabra o frase':'Pega aquí el texto cifrado';
+  $('go').textContent=m==='c'?'Cifrar':'Descifrar';
+  $('out').value='';setMsg('');
+}
+$('tabC').onclick=function(){setMode('c')};
+$('tabD').onclick=function(){setMode('d')};
+
+$('go').onclick=async function(){
+  var t=$('inp').value,p=$('key').value;
+  if(!t.trim()){setMsg('Escribe el texto primero.','err');return}
+  if(!p&&$('met').value!=='atbash'){setMsg('Falta la palabra o frase clave.','err');return}
+  if(!(window.crypto&&crypto.subtle)){setMsg('Tu navegador no admite cifrado seguro aquí.','err');return}
+  var b=$('go');b.disabled=true;setMsg('Procesando…');
+  try{
+    var r=await run(mode,t,p);
+    $('out').value=r;
+    setMsg(mode==='c'?'Listo. Guarda el resultado; sin la clave no se puede recuperar.':($('met').value.indexOf('aes')===0?'Descifrado correctamente.':'Listo. Si la clave es incorrecta, saldrá texto sin sentido.'),'ok');
+  }catch(e){
+    $('out').value='';
+    setMsg(mode==='d'?'No se pudo descifrar: clave incorrecta o texto dañado.':'Error al cifrar.','err');
+  }
+  b.disabled=false;
+};
+$('copy').onclick=async function(){
+  var v=$('out').value;if(!v)return;
+  try{await navigator.clipboard.writeText(v);setMsg('Copiado.','ok')}
+  catch(e){$('out').select();setMsg('Selecciona y copia manualmente.')}
+};
+$('clear').onclick=function(){$('inp').value='';$('key').value='';$('out').value='';setMsg('')};
+})();
+</script>
+</body>
+</html>
